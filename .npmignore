@@ -1,0 +1,8 @@
+src/
+test/
+examples/
+node_modules/
+tsconfig.json
+vitest.config.ts
+*.log
+.github-workflow.yml

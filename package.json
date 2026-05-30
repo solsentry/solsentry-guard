@@ -1,0 +1,56 @@
+{
+  "name": "@solsentry/guard",
+  "version": "0.0.1",
+  "description": "Pre-signing risk checks for Solana transactions \u2014 show users who they're about to trust, before they sign.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "solana",
+    "wallet",
+    "security",
+    "transaction",
+    "pre-sign",
+    "drainer",
+    "risk",
+    "solsentry"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/solsentry/solsentry-guard.git"
+  },
+  "homepage": "https://github.com/solsentry/solsentry-guard#readme",
+  "bugs": {
+    "url": "https://github.com/solsentry/solsentry-guard/issues"
+  }
+}
