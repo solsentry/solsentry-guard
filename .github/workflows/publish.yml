@@ -1,5 +1,10 @@
 name: Publish to npm
 
+# Token-free publishing via OIDC trusted publishing.
+# Prereq (one-time, on npmjs.com): @solsentry/guard → Settings → Trusted Publisher
+#   → GitHub Actions → org `solsentry`, repo `solsentry-guard`, workflow `publish.yml`.
+# Then pushing a v* tag publishes with no NPM_TOKEN and no OTP. See RELEASING.md.
+
 on:
   push:
     tags:
@@ -10,15 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      id-token: write # required for OIDC auth + provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      - run: npm install -g npm@latest # OIDC trusted publishing needs npm >= 11.5.1
       - run: npm ci
       - run: npm run build
-      - run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --access public --provenance
