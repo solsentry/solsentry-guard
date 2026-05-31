@@ -1,0 +1,19 @@
+{
+  "name": "@solsentry/guard-extension",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Chrome (MV3) extension wrapper around @solsentry/guard — intercepts wallet signTransaction calls and warns on dangerous programs.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "echo 'TODO: wire vite + @crxjs/vite-plugin' && exit 1",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@solsentry/guard": "^0.0.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "typescript": "^5.4.0"
+  }
+}

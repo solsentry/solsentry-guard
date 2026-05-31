@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>SolSentry Guard</title>
+    <style>
+      body{margin:0;padding:16px;width:320px;background:#0a0a0a;color:#fafafa;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;}
+      h1{margin:0 0 12px;font-size:14px;letter-spacing:0.04em;text-transform:uppercase;color:#888;}
+      .toggle{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;padding:10px 12px;border:1px solid #1f1f1f;border-radius:8px;}
+      .recent{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;}
+      .item{padding:8px 10px;border:1px solid #1f1f1f;border-radius:8px;}
+      .verdict{display:inline-block;font-size:10px;padding:2px 6px;border-radius:4px;text-transform:uppercase;letter-spacing:0.05em;margin-right:6px;}
+      .verdict.safe{background:#14f195;color:#0a0a0a;}
+      .verdict.caution{background:#fbbf24;color:#0a0a0a;}
+      .verdict.dangerous{background:#ff4d4d;color:#0a0a0a;}
+      .verdict.unknown{background:#3f3f3f;color:#fafafa;}
+      .summary{margin-top:4px;color:#cfcfcf;font-size:12px;}
+      .origin{color:#666;font-size:11px;margin-top:2px;}
+      .empty{color:#666;text-align:center;padding:24px;}
+      input[type=checkbox]{accent-color:#14f195;}
+    </style>
+  </head>
+  <body>
+    <h1>SolSentry Guard</h1>
+    <label class="toggle">
+      <span>Protection enabled</span>
+      <input type="checkbox" id="enabled" checked />
+    </label>
+    <div class="recent" id="recent"></div>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>
