@@ -66,6 +66,29 @@ export interface ExitQuote {
   minAmountOut: string;
   deadline: string;
   timeEstimate?: number;
+  /** The request as 1Click echoed it back; absent when the response omits it. */
+  quoteRequest?: EchoedRequest;
+}
+
+export interface EchoedRequest {
+  recipient?: string;
+  refundTo?: string;
+  amount?: string;
+  originAsset?: string;
+  destinationAsset?: string;
+}
+
+function echoed(json: unknown): EchoedRequest | undefined {
+  const r = (json as { quoteRequest?: Record<string, unknown> } | null)?.quoteRequest;
+  if (!r || typeof r !== "object") return undefined;
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  return {
+    recipient: str(r.recipient),
+    refundTo: str(r.refundTo),
+    amount: str(r.amount),
+    originAsset: str(r.originAsset),
+    destinationAsset: str(r.destinationAsset),
+  };
 }
 
 const isDigits = (v: unknown): v is string => typeof v === "string" && /^\d+$/.test(v);
@@ -102,13 +125,14 @@ export function validateQuoteResponse(json: unknown): ExitQuote {
     depositAddress,
     depositMemo: typeof q.depositMemo === "string" && q.depositMemo ? q.depositMemo : undefined,
     deadline: q.deadline,
+    quoteRequest: echoed(json),
     ...amounts(q),
   };
 }
 
 /** A dry quote has no depositAddress/deadline; keep only the amounts. */
 export function validateDryQuote(json: unknown): ExitQuote {
-  return { depositAddress: "", deadline: "", ...amounts(quoteObject(json)) };
+  return { depositAddress: "", deadline: "", quoteRequest: echoed(json), ...amounts(quoteObject(json)) };
 }
 
 /** 1Click reports the route minimum only in the error text: "try at least 14719409". */
@@ -190,6 +214,8 @@ export async function requestQuote(
 export function sendRefusals(p: {
   quote: ExitQuote;
   requested: bigint;
+  /** What we asked for: the echoed quoteRequest must match all of it. */
+  expected: { recipient: string; refundTo: string };
   routeMinimum?: bigint;
   now?: number;
 }): string[] {
@@ -201,6 +227,19 @@ export function sendRefusals(p: {
   }
   if (p.routeMinimum !== undefined && BigInt(quote.amountIn) < p.routeMinimum) {
     out.push(`amount ${quote.amountIn} is below the route minimum ${p.routeMinimum}`);
+  }
+  const er = quote.quoteRequest;
+  if (!er) {
+    out.push("quote response does not echo quoteRequest; cannot verify recipient and refund address");
+  } else {
+    const chk = (name: string, got: string | undefined, want: string) => {
+      if (got !== want) out.push(`echoed ${name} ${got ?? "(missing)"} does not match expected ${want}`);
+    };
+    chk("recipient", er.recipient, p.expected.recipient);
+    chk("refundTo", er.refundTo, p.expected.refundTo);
+    chk("originAsset", er.originAsset, SOL_ASSET);
+    chk("destinationAsset", er.destinationAsset, ZEC_ASSET);
+    chk("amount", er.amount, p.requested.toString());
   }
   if (BigInt(quote.minAmountOut) <= 0n) out.push("minAmountOut is zero");
   if (quote.depositMemo) out.push("deposit requires a memo; a plain transfer cannot carry it");

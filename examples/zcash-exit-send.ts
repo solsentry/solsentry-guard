@@ -121,7 +121,11 @@ async function main() {
   }
 
   // 4. Refusals, then sign + send + confirm.
-  const refusals = sendRefusals({ quote, requested: args.amount });
+  const refusals = sendRefusals({
+    quote,
+    requested: args.amount,
+    expected: { recipient: args.address, refundTo },
+  });
   if (refusals.length) {
     say("refused", { reasons: refusals });
     process.exit(2);

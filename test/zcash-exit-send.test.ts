@@ -13,7 +13,14 @@ import {
 } from "../src/zcash/exit-send.js";
 
 const DEPOSIT = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pKo4ps";
-const goodQuote = (over: Record<string, unknown> = {}) => ({
+const ADDR = "t1abc";
+const PK = "SignerPubkey1111111111111111111111111111111";
+const echo = (over: Record<string, unknown> = {}) => ({
+  recipient: ADDR, refundTo: PK, amount: "50000000",
+  originAsset: "nep141:sol.omft.near", destinationAsset: "nep141:zec.omft.near", ...over,
+});
+const goodQuote = (over: Record<string, unknown> = {}, qr: Record<string, unknown> | null = echo()) => ({
+  ...(qr ? { quoteRequest: qr } : {}),
   quote: {
     depositAddress: DEPOSIT,
     amountIn: "50000000",
@@ -111,20 +118,33 @@ describe("requestQuote", () => {
   });
 });
 
+const EXP = { recipient: ADDR, refundTo: PK };
 describe("sendRefusals", () => {
   const q = (o: Partial<ExitQuote> = {}): ExitQuote => ({ ...validateQuoteResponse(goodQuote()), ...o });
   it("passes a clean quote", () => {
-    expect(sendRefusals({ quote: q(), requested: 50000000n, routeMinimum: 14719409n })).toEqual([]);
+    expect(sendRefusals({ quote: q(), requested: 50000000n, expected: EXP, routeMinimum: 14719409n })).toEqual([]);
+  });
+  it("refuses each echoed-request mismatch, and a missing echo", () => {
+    const run = (qr: Record<string, unknown> | null) =>
+      sendRefusals({ quote: validateQuoteResponse(goodQuote({}, qr)), requested: 50000000n, expected: EXP });
+    expect(run(echo())).toEqual([]);
+    expect(run(echo({ recipient: "t1evil" })).join()).toMatch(/echoed recipient/);
+    expect(run(echo({ refundTo: "Other" })).join()).toMatch(/echoed refundTo/);
+    expect(run(echo({ originAsset: "nep141:x" })).join()).toMatch(/echoed originAsset/);
+    expect(run(echo({ destinationAsset: "nep141:y" })).join()).toMatch(/echoed destinationAsset/);
+    expect(run(echo({ amount: "49999999" })).join()).toMatch(/echoed amount/);
+    expect(run(echo({ recipient: undefined })).join()).toMatch(/\(missing\)/);
+    expect(run(null).join()).toMatch(/does not echo quoteRequest/);
   });
   it("refuses amount mismatch, below minimum, memo, stale or dry quote", () => {
-    expect(sendRefusals({ quote: q(), requested: 49999999n }).join()).toMatch(/differs/);
-    expect(sendRefusals({ quote: q({ amountIn: "100" }), requested: 100n, routeMinimum: 14719409n }).join()).toMatch(/route minimum/);
-    expect(sendRefusals({ quote: q({ depositMemo: "1" }), requested: 50000000n }).join()).toMatch(/memo/);
+    expect(sendRefusals({ quote: q(), requested: 49999999n, expected: EXP }).join()).toMatch(/differs/);
+    expect(sendRefusals({ quote: q({ amountIn: "100" }), requested: 100n, expected: EXP, routeMinimum: 14719409n }).join()).toMatch(/route minimum/);
+    expect(sendRefusals({ quote: q({ depositMemo: "1" }), requested: 50000000n, expected: EXP }).join()).toMatch(/memo/);
     expect(
-      sendRefusals({ quote: q({ deadline: new Date(Date.now() + 60_000).toISOString() }), requested: 50000000n }).join(),
+      sendRefusals({ quote: q({ deadline: new Date(Date.now() + 60_000).toISOString() }), requested: 50000000n, expected: EXP }).join(),
     ).toMatch(/deadline/);
-    expect(sendRefusals({ quote: q({ depositAddress: "" }), requested: 50000000n }).join()).toMatch(/dry quote/);
-    expect(sendRefusals({ quote: q({ minAmountOut: "0" }), requested: 50000000n }).join()).toMatch(/minAmountOut/);
+    expect(sendRefusals({ quote: q({ depositAddress: "" }), requested: 50000000n, expected: EXP }).join()).toMatch(/dry quote/);
+    expect(sendRefusals({ quote: q({ minAmountOut: "0" }), requested: 50000000n, expected: EXP }).join()).toMatch(/minAmountOut/);
   });
 });
 
