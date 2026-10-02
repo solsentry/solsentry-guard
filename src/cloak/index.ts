@@ -330,7 +330,7 @@ export async function findFirstFunder(
     meta?: { innerInstructions?: Array<{ instructions: ParsedIx[] }> } | null;
   } | null>(f, url, "getTransaction", [
     oldest.signature,
-    { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 },
+    { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 },
   ]);
   const ixs: ParsedIx[] = [
     ...(tx?.transaction?.message?.instructions ?? []),
