@@ -93,12 +93,16 @@ shape as the recipient check:
 1. the sender address itself (contract analysis: known drainers, high risk score);
 2. the sender as an operator (`/v1/operator/{wallet}`): CRITICAL/HIGH risk or 2+ confirmed
    rugs blocks, MEDIUM or 1 confirmed rug warns;
-3. the source of funds (`/v1/reverse-follow/{wallet}`): if a funder is found, steps 1 and 2
-   run on the funder too. A flagged funder blocks with `FUNDED_BY_FLAGGED` (the depth is in
-   the explanation); a funder with warnings warns. "Inconclusive" with no funder is normal
-   for fresh wallets and is not a signal.
+3. the source of funds, one hop only: the sender's first funding transfer is found over
+   Solana JSON-RPC (oldest signature, bounded to 5 pages of history; `rpcUrl` option or
+   `SOLANA_RPC_URL`, default public mainnet-beta; `rpcUrl` is required for a real send).
+   The funder is then screened with steps 1 and 2. A flagged funder blocks with
+   `FUNDED_BY_FLAGGED` (depth 1); a funder with warnings warns. This is the wallet's first
+   funding transfer, not a full multi-hop trace. If the wallet has more than 5 pages of
+   history, is fresh, or has no plain funding transfer, funding is "unknown": no signal,
+   not an error.
 
-If any lookup fails or times out, the check follows `policy.onCheckError` (default `"block"`,
+If any lookup (SolSentry API or RPC) fails or times out, the check follows `policy.onCheckError` (default `"block"`,
 fail closed).
 
 ```ts

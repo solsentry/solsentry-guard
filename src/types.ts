@@ -90,15 +90,3 @@ export interface OperatorProfile {
   confirmed_rugs?: number;
   [key: string]: unknown;
 }
-
-/** Response of GET /v1/reverse-follow/{wallet} (source-of-funds trace). */
-export interface ReverseFollowResult {
-  target: string;
-  /** Empty string when no funder was found (normal for fresh wallets). */
-  found_payer: string;
-  /** -1 when not found. */
-  found_at_depth: number;
-  status: string;
-  path: unknown[];
-  [key: string]: unknown;
-}

@@ -6,7 +6,6 @@ export type {
   LookalikeFinding,
   LookalikeResult,
   OperatorProfile,
-  ReverseFollowResult,
   GuardClientOptions,
   SignAdvice,
   AnalyzeBeforeSignOptions,

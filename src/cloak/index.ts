@@ -10,7 +10,6 @@ import type {
   ContractAnalysis,
   LookalikeResult,
   OperatorProfile,
-  ReverseFollowResult,
 } from "../types.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -44,8 +43,11 @@ export interface RecipientVerdict {
 export interface SenderVerdict extends RecipientVerdict {
   /** Operator profile of the sender, when fetched. */
   operator?: OperatorProfile;
-  /** Source-of-funds trace, when fetched. */
-  funding?: ReverseFollowResult;
+  /**
+   * First-funding lookup (1 hop, via Solana RPC). "unknown" = no signal (fresh wallet,
+   * long history, or no plain funding transfer found); it is not an error.
+   */
+  funding?: FundingLookup;
   /** The upstream funder that was screened, if one was found. */
   funder?: { address: string; depth: number; decision: RecipientDecision; reasons: string[] };
 }
@@ -105,7 +107,7 @@ export interface GuardedPrivateSendOptions {
   cloak?: CloakSdk;
   /** Inject a guard client (tests). */
   guard?: Pick<SolSentryGuard, "analyzeProgram" | "checkLookalike"> &
-    Partial<Pick<SolSentryGuard, "getOperator" | "reverseFollow">>;
+    Partial<Pick<SolSentryGuard, "getOperator">>;
   /**
    * Opt-in inbound check (source of funds) on the sender, run BEFORE any Cloak
    * import or deposit. Default false. Uses `sender` or, if absent, `signer.address`.
@@ -250,8 +252,102 @@ export async function checkRecipient(
 
 type SenderGuardLike = Pick<
   SolSentryGuard,
-  "analyzeProgram" | "getOperator" | "reverseFollow"
+  "analyzeProgram" | "getOperator"
 >;
+
+export const DEFAULT_SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com";
+const SIG_PAGE = 1000;
+const MAX_SIG_PAGES = 5;
+
+export type FundingLookup =
+  | { status: "found"; funder: string; depth: 1; signature: string }
+  | { status: "unknown"; reason: "NO_HISTORY" | "HISTORY_TOO_LONG" | "NO_FUNDING_TRANSFER" };
+
+export interface SenderCheckOptions {
+  /** Solana JSON-RPC endpoint for the first-funder lookup. Default: public mainnet-beta. */
+  rpcUrl?: string;
+  /** Inject fetch (tests). */
+  fetch?: typeof fetch;
+}
+
+async function rpcCall<T>(f: typeof fetch, url: string, method: string, params: unknown[]): Promise<T> {
+  const res = await f(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
+  if (!res.ok) throw new Error(`Solana RPC ${method} HTTP ${res.status}`);
+  const body = (await res.json()) as { result?: T; error?: { message?: string } };
+  if (body.error) throw new Error(`Solana RPC ${method}: ${body.error.message ?? "error"}`);
+  return body.result as T;
+}
+
+interface ParsedIx {
+  program?: string;
+  parsed?: { type?: string; info?: Record<string, unknown> };
+  [k: string]: unknown;
+}
+
+/**
+ * Find the wallet's FIRST funder: the source of the earliest system transfer /
+ * createAccount that credits it. One hop only; bounded to 5 pages of signatures.
+ * Throws on RPC errors.
+ */
+export async function findFirstFunder(
+  wallet: string,
+  opts: SenderCheckOptions = {},
+): Promise<FundingLookup> {
+  const f = (opts.fetch ?? globalThis.fetch).bind(globalThis) as typeof fetch;
+  const url = opts.rpcUrl ?? DEFAULT_SOLANA_RPC_URL;
+  let before: string | undefined;
+  let last: Array<{ signature: string; err: unknown }> = [];
+  let exhausted = false;
+  for (let page = 0; page < MAX_SIG_PAGES; page++) {
+    const cfg: Record<string, unknown> = { limit: SIG_PAGE };
+    if (before) cfg.before = before;
+    const sigs = await rpcCall<Array<{ signature: string; err: unknown }>>(
+      f, url, "getSignaturesForAddress", [wallet, cfg],
+    );
+    if (sigs.length === 0) {
+      exhausted = true;
+      break;
+    }
+    last = sigs;
+    if (sigs.length < SIG_PAGE) {
+      exhausted = true;
+      break;
+    }
+    before = (sigs[sigs.length - 1] as { signature: string }).signature;
+  }
+  if (last.length === 0) return { status: "unknown", reason: "NO_HISTORY" };
+  if (!exhausted) return { status: "unknown", reason: "HISTORY_TOO_LONG" };
+
+  // Newest-first list: the oldest successful signature is the last one with err == null.
+  const oldest = [...last].reverse().find((s) => s.err == null);
+  if (!oldest) return { status: "unknown", reason: "NO_FUNDING_TRANSFER" };
+  const tx = await rpcCall<{
+    transaction?: { message?: { instructions?: ParsedIx[] } };
+    meta?: { innerInstructions?: Array<{ instructions: ParsedIx[] }> } | null;
+  } | null>(f, url, "getTransaction", [
+    oldest.signature,
+    { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 },
+  ]);
+  const ixs: ParsedIx[] = [
+    ...(tx?.transaction?.message?.instructions ?? []),
+    ...(tx?.meta?.innerInstructions ?? []).flatMap((i) => i.instructions),
+  ];
+  for (const ix of ixs) {
+    if (ix.program !== "system" || !ix.parsed) continue;
+    const info = ix.parsed.info ?? {};
+    if (ix.parsed.type === "transfer" && info.destination === wallet && typeof info.source === "string") {
+      return { status: "found", funder: info.source, depth: 1, signature: oldest.signature };
+    }
+    if (ix.parsed.type === "createAccount" && info.newAccount === wallet && typeof info.source === "string") {
+      return { status: "found", funder: info.source, depth: 1, signature: oldest.signature };
+    }
+  }
+  return { status: "unknown", reason: "NO_FUNDING_TRANSFER" };
+}
 
 interface WalletScreen {
   block: boolean;
@@ -323,6 +419,7 @@ export async function checkSender(
   sender: string,
   policy: RecipientPolicy,
   guard: SenderGuardLike,
+  senderOpts: SenderCheckOptions = {},
 ): Promise<SenderVerdict> {
   const threshold = policy.blockThreshold ?? 80;
   const failClosed = (policy.onCheckError ?? "block") === "block";
@@ -333,21 +430,22 @@ export async function checkSender(
     let warn = self.warn;
     let detail = self.detail;
 
-    const funding = await guard.reverseFollow(sender);
+    // Skip the RPC lookup when the sender is already blocked on its own.
+    const funding = self.block ? undefined : await findFirstFunder(sender, senderOpts);
     let funder: SenderVerdict["funder"];
-    if (funding.found_payer) {
-      const depth = funding.found_at_depth;
-      const f = await screenWallet(funding.found_payer, threshold, guard);
+    if (funding?.status === "found") {
+      const depth = funding.depth;
+      const f = await screenWallet(funding.funder, threshold, guard);
       const decision: RecipientDecision = f.block ? "block" : f.warn ? "warn" : "allow";
-      funder = { address: funding.found_payer, depth, decision, reasons: f.reasons };
+      funder = { address: funding.funder, depth, decision, reasons: f.reasons };
       if (f.block) {
         block = true;
         reasons.push("FUNDED_BY_FLAGGED");
-        detail = `funded by flagged wallet ${funding.found_payer} at depth ${depth} (${f.reasons.join(", ")})`;
+        detail = `funded by flagged wallet ${funding.funder} at depth ${depth} (${f.reasons.join(", ")})`;
       } else if (f.warn) {
         warn = true;
         reasons.push("FUNDED_BY_CAUTION");
-        if (!self.block) detail = `funded by wallet ${funding.found_payer} at depth ${depth} with warnings (${f.reasons.join(", ")})`;
+        if (!self.block) detail = `funded by wallet ${funding.funder} at depth ${depth} with warnings (${f.reasons.join(", ")})`;
       }
     }
     if (!block && warn && policy.strict) block = true;
@@ -400,7 +498,16 @@ export async function guardedPrivateSend(
   if (opts.checkSender) {
     const sender = opts.sender ?? (opts.signer ? String(opts.signer.address) : undefined);
     if (!sender) throw new Error("checkSender needs `sender` or a signer with an address.");
-    senderVerdict = await checkSender(sender, opts.policy ?? {}, guard as unknown as SenderGuardLike);
+    const rpcUrl = opts.rpcUrl ?? (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.SOLANA_RPC_URL ?? DEFAULT_SOLANA_RPC_URL;
+    if (!opts.dryRun && !opts.rpcUrl) {
+      throw new Error("rpcUrl is required for a real send with checkSender (first-funder lookup).");
+    }
+    senderVerdict = await checkSender(
+      sender,
+      opts.policy ?? {},
+      guard as unknown as SenderGuardLike,
+      { rpcUrl },
+    );
     if (senderVerdict.decision === "block") {
       return {
         verdict: senderVerdict,
