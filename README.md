@@ -116,6 +116,33 @@ const res = await guardedPrivateSend({
 Dry run from the CLI (no signer needed):
 `npx tsx examples/cloak-guarded-send.ts <recipient> <lamports> --check-sender <address>`.
 
+## Zcash exit
+
+Optional entrypoint `@solsentry/guard/zcash`. Offline, zero dependencies, no network calls. For a
+Solana-to-Zcash exit (for example private swap to the ZEC SPL token, then a cross-chain route to
+native ZEC), it checks the destination address before anything is sent.
+
+```ts
+import { checkZcashExit, classifyZcashAddress } from "@solsentry/guard/zcash";
+
+const v = checkZcashExit(address);
+// v.decision: "block" | "warn" | "allow"; v.reasons; v.note; v.destination
+```
+
+| Destination | Decision | Meaning |
+|---|---|---|
+| Not a valid address (bad checksum, truncated, wrong type) | `block` | Funds sent to a mistyped address cannot be recovered. |
+| Shielded only (`zs1`, or `u1` with Sapling/Orchard receivers only) | `allow` | No public trail after exit: value, sender and recipient are not published on Zcash. |
+| Transparent leg (`t1`/`t3`, or `u1` with a transparent receiver) | `warn` | Destination is publicly traceable on Zcash. |
+
+- Unified addresses are decoded per ZIP-316 (bech32m, F4Jumble, receiver typecodes).
+- Scope: this classifies the address type only. It says nothing about who controls the address,
+  and it does not cover the Solana side or the cross-chain route.
+- `classifyZcashAddress(address)` returns `{ kind, network, receivers, hasTransparentLeg, traceability }`
+  and throws `ZcashAddressError` on invalid input.
+- Dry run (classifies, then requests a quote only; never signs or sends):
+  `npx tsx examples/zcash-exit.ts <zcash-address> [amount] [--origin sol|zec-spl] [--no-quote]`
+
 ## Development
 
 ```bash
