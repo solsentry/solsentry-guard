@@ -84,6 +84,34 @@ const res = await guardedPrivateSend({
   `npx tsx examples/cloak-guarded-send.ts <recipient> <lamports> [--send]`
   (`SOLANA_RPC_URL`, `KEYPAIR_PATH` are read only for `--send`).
 
+## Inbound check (source of funds)
+
+The Cloak module can also screen the *sender* before any funds enter the shielded pool.
+`checkSender(sender, policy, guard)` returns the same `{ decision, reasons, explanation }`
+shape as the recipient check:
+
+1. the sender address itself (contract analysis: known drainers, high risk score);
+2. the sender as an operator (`/v1/operator/{wallet}`): CRITICAL/HIGH risk or 2+ confirmed
+   rugs blocks, MEDIUM or 1 confirmed rug warns;
+3. the source of funds (`/v1/reverse-follow/{wallet}`): if a funder is found, steps 1 and 2
+   run on the funder too. A flagged funder blocks with `FUNDED_BY_FLAGGED` (the depth is in
+   the explanation); a funder with warnings warns. "Inconclusive" with no funder is normal
+   for fresh wallets and is not a signal.
+
+If any lookup fails or times out, the check follows `policy.onCheckError` (default `"block"`,
+fail closed).
+
+```ts
+const res = await guardedPrivateSend({
+  recipient, amount, mint: "SOL", signer, rpcUrl, persistUtxos,
+  checkSender: true, // opt-in, default false; runs before any Cloak import or deposit
+});
+// res.status === "blocked" && res.side === "sender" -> nothing moved
+```
+
+Dry run from the CLI (no signer needed):
+`npx tsx examples/cloak-guarded-send.ts <recipient> <lamports> --check-sender <address>`.
+
 ## Development
 
 ```bash

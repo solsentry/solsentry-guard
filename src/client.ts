@@ -2,6 +2,8 @@ import { extractProgramIds, INFRA_PROGRAMS } from "./extract.js";
 import type {
   AnalyzeBeforeSignOptions,
   ContractAnalysis,
+  OperatorProfile,
+  ReverseFollowResult,
   GuardClientOptions,
   LookalikeResult,
   SignAdvice,
@@ -62,6 +64,18 @@ export class SolSentryGuard {
       );
     }
     this.fetchImpl = f.bind(globalThis);
+  }
+
+  /** Operator profile for a wallet (GET /v1/operator/{wallet}). */
+  async getOperator(wallet: string): Promise<OperatorProfile> {
+    return this.get<OperatorProfile>(`/v1/operator/${encodeURIComponent(wallet)}`);
+  }
+
+  /** Source-of-funds trace for a wallet (GET /v1/reverse-follow/{wallet}). */
+  async reverseFollow(wallet: string): Promise<ReverseFollowResult> {
+    return this.get<ReverseFollowResult>(
+      `/v1/reverse-follow/${encodeURIComponent(wallet)}`,
+    );
   }
 
   /** Analyze a single program/mint/wallet address. */

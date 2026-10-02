@@ -3,6 +3,9 @@
 //   npx tsx examples/cloak-guarded-send.ts <recipient> <lamports>          # dry run (default)
 //   npx tsx examples/cloak-guarded-send.ts <recipient> <lamports> --send   # REAL mainnet send
 //
+//   npx tsx examples/cloak-guarded-send.ts <recipient> <lamports> --check-sender <address>
+//        # dry run that also runs the inbound (source-of-funds) check on <address>
+//
 // Env: SOLANA_RPC_URL, KEYPAIR_PATH (file path; only read with --send),
 //      optional SOLSENTRY_API_BASE, SOLSENTRY_API_KEY, NOTES_DIR (default ./cloak-notes).
 // Output: one JSON document on stdout.
@@ -14,10 +17,17 @@ import { guardedPrivateSend, type PersistedNote } from "../src/cloak/index.js";
 async function main() {
   const args = process.argv.slice(2);
   const real = args.includes("--send");
-  const [recipient, lamportsArg] = args.filter((a) => !a.startsWith("--"));
+  const csIdx = args.indexOf("--check-sender");
+  const senderArg = csIdx >= 0 ? args[csIdx + 1] : undefined;
+  if (csIdx >= 0 && (!senderArg || senderArg.startsWith("--"))) {
+    throw new Error("--check-sender needs an address");
+  }
+  const [recipient, lamportsArg] = args.filter(
+    (a, i) => !a.startsWith("--") && !(csIdx >= 0 && i === csIdx + 1),
+  );
   if (!recipient || !lamportsArg) {
     throw new Error(
-      "Usage: cloak-guarded-send.ts <recipient> <lamports> [--send]  (default: dry run)",
+      "Usage: cloak-guarded-send.ts <recipient> <lamports> [--send | --check-sender <address>]  (default: dry run)",
     );
   }
   const amount = BigInt(lamportsArg);
@@ -33,6 +43,7 @@ async function main() {
       mint: "SOL",
       dryRun: true,
       solsentry,
+      ...(senderArg ? { checkSender: true, sender: senderArg } : {}),
     });
     console.log(JSON.stringify(res, (_k, v) => (typeof v === "bigint" ? v.toString() : v), 2));
     return;

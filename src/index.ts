@@ -5,6 +5,8 @@ export type {
   ContractAnalysis,
   LookalikeFinding,
   LookalikeResult,
+  OperatorProfile,
+  ReverseFollowResult,
   GuardClientOptions,
   SignAdvice,
   AnalyzeBeforeSignOptions,

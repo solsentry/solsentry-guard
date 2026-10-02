@@ -6,7 +6,12 @@
 // lazily, only when a real (non-dry-run) send is executed.
 
 import { SolSentryGuard } from "../client.js";
-import type { ContractAnalysis, LookalikeResult } from "../types.js";
+import type {
+  ContractAnalysis,
+  LookalikeResult,
+  OperatorProfile,
+  ReverseFollowResult,
+} from "../types.js";
 
 export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const CLOAK_PRODUCTION_RELAY_URL = "https://api.cloak.ag";
@@ -34,6 +39,15 @@ export interface RecipientVerdict {
   risk_score: number | null;
   analysis?: ContractAnalysis;
   lookalike?: LookalikeResult;
+}
+
+export interface SenderVerdict extends RecipientVerdict {
+  /** Operator profile of the sender, when fetched. */
+  operator?: OperatorProfile;
+  /** Source-of-funds trace, when fetched. */
+  funding?: ReverseFollowResult;
+  /** The upstream funder that was screened, if one was found. */
+  funder?: { address: string; depth: number; decision: RecipientDecision; reasons: string[] };
 }
 
 /** Minimal structural view of the parts of `@cloak.dev/sdk` used here. */
@@ -90,12 +104,24 @@ export interface GuardedPrivateSendOptions {
   /** Inject the SDK (tests). Defaults to a lazy import of `@cloak.dev/sdk`. */
   cloak?: CloakSdk;
   /** Inject a guard client (tests). */
-  guard?: Pick<SolSentryGuard, "analyzeProgram" | "checkLookalike">;
+  guard?: Pick<SolSentryGuard, "analyzeProgram" | "checkLookalike"> &
+    Partial<Pick<SolSentryGuard, "getOperator" | "reverseFollow">>;
+  /**
+   * Opt-in inbound check (source of funds) on the sender, run BEFORE any Cloak
+   * import or deposit. Default false. Uses `sender` or, if absent, `signer.address`.
+   */
+  checkSender?: boolean;
+  /** Sender address for the inbound check (needed for dryRun, where there is no signer). */
+  sender?: string;
 }
 
 export interface GuardedPrivateSendResult {
   verdict: RecipientVerdict;
   status: "sent" | "blocked" | "dry-run";
+  /** Which party caused a "blocked" status. Absent for recipient blocks. */
+  side?: "sender" | "recipient";
+  /** Inbound verdict, present only when `checkSender` was on. */
+  senderVerdict?: SenderVerdict;
   /** True if the send was executed (sent) or would be allowed (dry-run). */
   allowed: boolean;
   depositSig?: string;
@@ -222,6 +248,138 @@ export async function checkRecipient(
   };
 }
 
+type SenderGuardLike = Pick<
+  SolSentryGuard,
+  "analyzeProgram" | "getOperator" | "reverseFollow"
+>;
+
+interface WalletScreen {
+  block: boolean;
+  warn: boolean;
+  reasons: string[];
+  detail: string;
+  risk_score: number;
+  analysis: ContractAnalysis;
+  operator: OperatorProfile;
+}
+
+/** Steps 1+2 for one wallet: contract analysis, then operator profile. Throws on API error. */
+async function screenWallet(
+  wallet: string,
+  threshold: number,
+  guard: SenderGuardLike,
+): Promise<WalletScreen> {
+  const analysis = await guard.analyzeProgram(wallet);
+  const operator = await guard.getOperator(wallet);
+  const reasons: string[] = [];
+  let block = false;
+  let warn = false;
+
+  const category = (analysis.known_category ?? "").toLowerCase();
+  const hardFlags = (analysis.flags ?? [])
+    .map((f) => f.toUpperCase())
+    .filter((f) => BLOCK_FLAGS.includes(f));
+  if (category === "drainer" || hardFlags.length > 0) {
+    block = true;
+    reasons.push(...(hardFlags.length > 0 ? hardFlags : ["KNOWN_DRAINER"]));
+  }
+  if (analysis.verdict === "dangerous" || analysis.risk_score >= threshold) {
+    block = true;
+    if (reasons.length === 0) reasons.push("HIGH_RISK");
+  }
+  if (!block && analysis.verdict === "caution") {
+    warn = true;
+    reasons.push("CAUTION");
+  }
+
+  // Operator profile. Only CRITICAL/HIGH/MEDIUM and confirmed_rugs carry signal;
+  // LOW / UNKNOWN / missing are "no signal".
+  const level = (operator.risk_level ?? "").toUpperCase();
+  const rugs = Number(operator.confirmed_rugs ?? 0) || 0;
+  if (level === "CRITICAL" || level === "HIGH" || rugs >= 2) {
+    block = true;
+    reasons.push("OPERATOR_HIGH_RISK");
+  } else if (level === "MEDIUM" || rugs === 1) {
+    warn = true;
+    reasons.push("OPERATOR_MEDIUM_RISK");
+  }
+
+  return {
+    block,
+    warn,
+    reasons,
+    detail: analysis.explanation || analysis.known_label || wallet,
+    risk_score: analysis.risk_score,
+    analysis,
+    operator,
+  };
+}
+
+/**
+ * Inbound check: is the sender (and whoever funded it) flagged? Never touches Cloak.
+ * Fails closed on any API error unless `policy.onCheckError === "warn"`.
+ */
+export async function checkSender(
+  sender: string,
+  policy: RecipientPolicy,
+  guard: SenderGuardLike,
+): Promise<SenderVerdict> {
+  const threshold = policy.blockThreshold ?? 80;
+  const failClosed = (policy.onCheckError ?? "block") === "block";
+  try {
+    const self = await screenWallet(sender, threshold, guard);
+    const reasons = [...self.reasons];
+    let block = self.block;
+    let warn = self.warn;
+    let detail = self.detail;
+
+    const funding = await guard.reverseFollow(sender);
+    let funder: SenderVerdict["funder"];
+    if (funding.found_payer) {
+      const depth = funding.found_at_depth;
+      const f = await screenWallet(funding.found_payer, threshold, guard);
+      const decision: RecipientDecision = f.block ? "block" : f.warn ? "warn" : "allow";
+      funder = { address: funding.found_payer, depth, decision, reasons: f.reasons };
+      if (f.block) {
+        block = true;
+        reasons.push("FUNDED_BY_FLAGGED");
+        detail = `funded by flagged wallet ${funding.found_payer} at depth ${depth} (${f.reasons.join(", ")})`;
+      } else if (f.warn) {
+        warn = true;
+        reasons.push("FUNDED_BY_CAUTION");
+        if (!self.block) detail = `funded by wallet ${funding.found_payer} at depth ${depth} with warnings (${f.reasons.join(", ")})`;
+      }
+    }
+    if (!block && warn && policy.strict) block = true;
+
+    const decision: RecipientDecision = block ? "block" : warn ? "warn" : "allow";
+    return {
+      decision,
+      reasons,
+      explanation:
+        decision === "block"
+          ? `Blocked: ${detail}`
+          : decision === "warn"
+            ? `Warning: ${detail}`
+            : "No risk signals found for the sender or its source of funds.",
+      risk_score: self.risk_score,
+      analysis: self.analysis,
+      operator: self.operator,
+      funding,
+      funder,
+    };
+  } catch (err) {
+    return {
+      decision: failClosed ? "block" : "warn",
+      reasons: ["CHECK_FAILED"],
+      explanation: `Sender check unavailable (${(err as Error).message}); ${
+        failClosed ? "not sending (fail closed)" : "proceeding with a warning"
+      }.`,
+      risk_score: null,
+    };
+  }
+}
+
 /**
  * Risk-check the recipient, then (if allowed and not dryRun) deposit into the Cloak
  * pool and fully withdraw to the recipient. One deposit, one full withdrawal.
@@ -237,11 +395,31 @@ export async function guardedPrivateSend(
       clientId: opts.solsentry?.clientId ?? "guard-cloak",
     });
 
+  // Opt-in inbound check: runs before anything else and before any Cloak import.
+  let senderVerdict: SenderVerdict | undefined;
+  if (opts.checkSender) {
+    const sender = opts.sender ?? (opts.signer ? String(opts.signer.address) : undefined);
+    if (!sender) throw new Error("checkSender needs `sender` or a signer with an address.");
+    senderVerdict = await checkSender(sender, opts.policy ?? {}, guard as unknown as SenderGuardLike);
+    if (senderVerdict.decision === "block") {
+      return {
+        verdict: senderVerdict,
+        senderVerdict,
+        side: "sender",
+        status: "blocked",
+        allowed: false,
+        explanation: `${senderVerdict.explanation} Cloak was not called; no funds moved.`,
+      };
+    }
+  }
+
   const verdict = await checkRecipient(opts.recipient, opts.policy ?? {}, guard);
 
   if (verdict.decision === "block") {
     return {
       verdict,
+      senderVerdict,
+      side: "recipient",
       status: "blocked",
       allowed: false,
       explanation: `${verdict.explanation} Cloak was not called; no funds moved.`,
@@ -250,6 +428,7 @@ export async function guardedPrivateSend(
   if (opts.dryRun) {
     return {
       verdict,
+      senderVerdict,
       status: "dry-run",
       allowed: true,
       explanation: `${verdict.explanation} Dry run: nothing was built or sent.`,
@@ -335,6 +514,7 @@ export async function guardedPrivateSend(
 
   return {
     verdict,
+    senderVerdict,
     status: "sent",
     allowed: true,
     depositSig: deposited.signature,
