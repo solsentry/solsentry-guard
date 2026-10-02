@@ -15,6 +15,10 @@
     "./cloak": {
       "types": "./dist/cloak/index.d.ts",
       "import": "./dist/cloak/index.js"
+    },
+    "./zcash": {
+      "types": "./dist/zcash/index.d.ts",
+      "import": "./dist/zcash/index.js"
     }
   },
   "files": [
