@@ -51,6 +51,39 @@ new SolSentryGuard({
 });
 ```
 
+## Private send with a pre-check (Cloak)
+
+Optional entrypoint `@solsentry/guard/cloak`. [Cloak](https://docs.cloak.ag) hides who paid
+whom on Solana mainnet; this adds the missing step of checking who is *receiving* before any
+funds enter the shielded pool. The core package stays dependency-free: `@cloak.dev/sdk` is an
+optional peer dependency (install it only if you use this entrypoint).
+
+```ts
+import { guardedPrivateSend } from "@solsentry/guard/cloak";
+
+const res = await guardedPrivateSend({
+  recipient,
+  amount: 50_000_000n, // lamports (SOL) or base units (USDC)
+  mint: "SOL",
+  signer,              // Cloak signer, e.g. signerFromSecretKey(...)
+  rpcUrl,
+  persistUtxos: (notes) => saveSomewhereSafe(notes), // required for a real send
+  policy: { contacts: knownContacts }, // optional: address-poisoning check
+});
+// res.status: "blocked" | "sent" ; res.verdict.reasons explains why
+```
+
+- The recipient is checked first. Known drainers, high-risk addresses and (with `contacts`)
+  lookalikes are blocked and Cloak is never called. Other findings return a warning; set
+  `policy.strict` to block those too. If the check cannot run, the send is blocked by default.
+- If allowed: one deposit, then one full withdrawal to the recipient (no change note).
+  The deposit note is passed to `persistUtxos` before the withdrawal starts. If Cloak fails
+  after the deposit, a `CloakSendError` carries the saved notes for recovery.
+- `dryRun: true` runs only the risk check; nothing is built or sent.
+- CLI example (dry run by default, real mainnet send only with `--send`):
+  `npx tsx examples/cloak-guarded-send.ts <recipient> <lamports> [--send]`
+  (`SOLANA_RPC_URL`, `KEYPAIR_PATH` are read only for `--send`).
+
 ## Development
 
 ```bash

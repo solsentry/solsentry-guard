@@ -1,7 +1,7 @@
 {
   "name": "@solsentry/guard",
   "version": "0.0.1",
-  "description": "Pre-signing risk checks for Solana transactions \u2014 show users who they're about to trust, before they sign.",
+  "description": "Pre-signing risk checks for Solana transactions — show users who they're about to trust, before they sign.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
@@ -11,6 +11,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./cloak": {
+      "types": "./dist/cloak/index.d.ts",
+      "import": "./dist/cloak/index.js"
     }
   },
   "files": [
@@ -39,8 +43,18 @@
     "node": ">=18"
   },
   "devDependencies": {
+    "@cloak.dev/sdk": "^0.2.5",
+    "tsx": "^4.19.0",
     "typescript": "^5.4.0",
     "vitest": "^1.6.0"
+  },
+  "peerDependencies": {
+    "@cloak.dev/sdk": "^0.2.5"
+  },
+  "peerDependenciesMeta": {
+    "@cloak.dev/sdk": {
+      "optional": true
+    }
   },
   "publishConfig": {
     "access": "public"
